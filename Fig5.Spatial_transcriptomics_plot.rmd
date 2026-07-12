@@ -1,0 +1,727 @@
+---
+title: "yjh_IPF-human_dataprocessing"
+author: "tang"
+date: "2025-09-18"
+output: html_document
+---
+**此脚本为确认图版的绘图脚本，只保留IPF这个data的样本进行绘图。只绘制ANTXR1这一个gene的表达值分布**
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = here::here())
+```
+
+1 加载R包，读取IPF这个data的全部25个Samples，设置
+```{r}
+library(Seurat)
+library(ggplot2)
+library(dplyr)
+library(patchwork)
+output <- 'IPF_human'
+dir.create(output)
+
+st_25 <- qs::qread('/home/data/tmh_project/ST_COPD_IPF/1_IPF_output/2_SCT_IPF_list_S-BSST1410.qs')
+st <-merge(st_25[[1]],st_25[-1])
+qs::qsave(st,'IPF_human/IPF_25samples_S-BSST1410.qs')
+
+```
+
+2 绘制ANTXR1这个基因在25个samples中的空间表达值
+```{r}
+# 创建输出目录
+output_1 <- 'IPF_human/25samples_spatialfeatureplot_v1'
+dir.create(output_1, recursive = TRUE)
+
+output_2 <- 'IPF_human/25samples_spatialfeatureplot_v2'
+dir.create(output_2, recursive = TRUE)
+
+output_3 <- 'IPF_human/25samples_spatialfeatureplot_v3'
+dir.create(output_3, recursive = TRUE)
+
+output_4 <- 'IPF_human/25samples_spatialfeatureplot_v4'
+dir.create(output_4, recursive = TRUE)
+
+# === 新增：创建V5版本输出目录 ===
+output_5 <- 'IPF_human/25samples_spatialfeatureplot_v5'
+dir.create(output_5, recursive = TRUE)
+
+# 定义目标基因
+genes <- c("ANTXR1", "FN1", "COL1A1", "ACTA2")
+
+# 循环处理每个基因
+for (gene in genes) {
+  message("Processing gene: ", gene)
+  
+  # 1) 从st_25这个list中分别提取每个样本的基因最大表达值
+  sample_names <- names(st_25)
+  sample_max_values <- sapply(sample_names, function(sample_name) {
+    sample_obj <- st_25[[sample_name]]
+    
+    # 检查基因是否存在
+    if (!("SCT" %in% names(sample_obj@assays)) ||
+        !(gene %in% rownames(sample_obj[["SCT"]]@data))) {
+      warning(sprintf("Gene %s not found in sample %s", gene, sample_name))
+      return(NA_real_)
+    }
+    
+    # 提取该样本中该基因的表达量并计算最大值
+    gene_expr <- as.numeric(sample_obj[["SCT"]]@data[gene, ])
+    max_expr <- max(gene_expr, na.rm = TRUE)
+    return(max_expr)
+  }, USE.NAMES = TRUE)
+  
+  # 转换为数据框并保存
+  sample_max_values_df <- data.frame(sample = names(sample_max_values), 
+                                     max_value = unname(sample_max_values),
+                                     stringsAsFactors = FALSE)
+  write.csv(sample_max_values_df, 
+            file.path(output_1, paste0("25samples_max_values_df_", gene, ".csv")), 
+            row.names = FALSE)
+  
+  # 找出所有样本最大值中的最小值
+  if (all(is.na(sample_max_values_df$max_value))) {
+    warning("All max values are NA for gene ", gene)
+    min_max_value <- NA_real_
+  } else {
+    min_max_value <- min(sample_max_values_df$max_value, na.rm = TRUE)
+  }
+  
+  # === 新增：计算V5版本使用的最大值cutoff（80%的最小最大值）===
+  if (!is.na(min_max_value)) {
+    v5_max_cutoff <- min_max_value * 0.8
+  } else {
+    v5_max_cutoff <- NA_real_
+  }
+  
+  print(sample_max_values_df)
+  print(paste0("The minimum of all sample max values for ", gene, " is: ", min_max_value))
+  print(paste0("V5 max cutoff (80% of min_max_value) for ", gene, " is: ", v5_max_cutoff))
+  
+  # === 版本1：设置最大值cutoff ===
+  plots_list_v1 <- list()
+  
+  for (sample_name in sample_names) {
+    sample_obj <- st_25[[sample_name]]
+    
+    # 检查基因是否存在
+    if (!("SCT" %in% names(sample_obj@assays)) ||
+        !(gene %in% rownames(sample_obj[["SCT"]]@data))) {
+      # 创建占位图
+      p_placeholder <- ggplot() + 
+        ggtitle(paste0(sample_name, " (", gene, " not found)")) +
+        theme_void() +
+        theme(plot.title = element_text(size = 15))
+      plots_list_v1[[sample_name]] <- p_placeholder
+      next
+    }
+    
+    # 绘图（设置max.cutoff = min_max_value）
+    if (!is.na(min_max_value)) {
+      p <- SpatialFeaturePlot(sample_obj, features = gene,
+                              pt.size.factor = 1.5,
+                              stroke = 0,
+                              image.alpha = 0.2,
+                              max.cutoff = min_max_value) +
+        scale_fill_gradient(
+          low = "lightgrey",
+          high = "red",
+          name = gene
+        ) +
+        ggtitle(sample_name) +
+        theme(plot.title = element_text(hjust = 0.5, size = 15))
+    } else {
+      # 如果min_max_value为NA，使用默认设置
+      p <- SpatialFeaturePlot(sample_obj, features = gene,
+                              pt.size.factor = 1.5,
+                              stroke = 0,
+                              image.alpha = 0.2) +
+        scale_fill_gradient(
+          low = "lightgrey",
+          high = "red",
+          name = gene
+        ) +
+        ggtitle(paste0(sample_name, " (no cutoff)")) +
+        theme(plot.title = element_text(hjust = 0.5, size = 15))
+    }
+    
+    plots_list_v1[[sample_name]] <- p
+  }
+  
+  # 拼接所有样本的图（版本1，按5列排列）
+  combined_plot_v1 <- wrap_plots(plots_list_v1, ncol = 5)
+  # 保存版本1
+  plot_filename_v1 <- file.path(output_1, paste0(gene, "_25samples_spatialfeatureplot_v1.pdf"))
+  ggsave(plot_filename_v1, combined_plot_v1, width = 15, height = 20)
+  
+  # === 版本2：不设置最大值cutoff ===
+  plots_list_v2 <- list()
+  
+  for (sample_name in sample_names) {
+    sample_obj <- st_25[[sample_name]]
+    
+    # 检查基因是否存在
+    if (!("SCT" %in% names(sample_obj@assays)) ||
+        !(gene %in% rownames(sample_obj[["SCT"]]@data))) {
+      # 创建占位图
+      p_placeholder <- ggplot() + 
+        ggtitle(paste0(sample_name, " (", gene, " not found)")) +
+        theme_void() +
+        theme(plot.title = element_text(size = 15))
+      plots_list_v2[[sample_name]] <- p_placeholder
+      next
+    }
+    
+    # 绘图（不设置max.cutoff）
+    p <- SpatialFeaturePlot(sample_obj, features = gene,
+                            pt.size.factor = 1.5,
+                            stroke = 0,
+                            image.alpha = 0.2) +
+      scale_fill_gradient(
+        low = "lightgrey",
+        high = "red",
+        name = gene
+      ) +
+      ggtitle(sample_name) +
+      theme(plot.title = element_text(hjust = 0.5, size = 15))
+    
+    plots_list_v2[[sample_name]] <- p
+  }
+  
+  # 拼接所有样本的图（版本2）
+  combined_plot_v2 <- wrap_plots(plots_list_v2, ncol = 5)
+  
+  # 保存版本2
+  plot_filename_v2 <- file.path(output_2, paste0(gene, "_25samples_spatialfeatureplot_v2.pdf"))
+  ggsave(plot_filename_v2, combined_plot_v2, width = 15, height = 20)
+  
+  # === 版本3：三色渐变，红色渐变出现在30%最大值到最大值之间 ===
+  plots_list_v3 <- list()
+  
+  for (sample_name in sample_names) {
+    sample_obj <- st_25[[sample_name]]
+    
+    # 检查基因是否存在
+    if (!("SCT" %in% names(sample_obj@assays)) ||
+        !(gene %in% rownames(sample_obj[["SCT"]]@data))) {
+      # 创建占位图
+      p_placeholder <- ggplot() + 
+        ggtitle(paste0(sample_name, " (", gene, " not found)")) +
+        theme_void() +
+        theme(plot.title = element_text(size = 15))
+      plots_list_v3[[sample_name]] <- p_placeholder
+      next
+    }
+    
+    # 获取当前样本的基因表达数据
+    current_sample_data <- as.numeric(sample_obj[["SCT"]]@data[gene, ])
+    
+    # 计算当前样本的最大值和30%最大值作为中间转换点
+    sample_max <- max(current_sample_data, na.rm = TRUE)
+    sample_30_percent_max <- sample_max * 0.3
+    
+    # 绘图（使用30%最大值作为中间转换点）
+    if (!is.na(sample_max) && sample_max > 0 && sample_30_percent_max > 0) {
+      p <- SpatialFeaturePlot(sample_obj, features = gene,
+                              pt.size.factor = 1.5,
+                              stroke = 0,
+                              image.alpha = 0.2) +
+        scale_fill_gradient2(
+          low = "white",
+          mid = "lightgrey", 
+          high = "red",
+          midpoint = sample_30_percent_max,
+          name = gene
+        ) +
+        ggtitle(sample_name) +
+        theme(plot.title = element_text(hjust = 0.5, size = 15))
+      
+      # 打印每个样本的最大值和30%最大值用于调试
+      message(paste0("V3 - Sample: ", sample_name, ", Max: ", round(sample_max, 4), 
+                     ", 30% Max: ", round(sample_30_percent_max, 4)))
+      
+    } else {
+      # 如果最大值为NA或0，使用默认渐变
+      p <- SpatialFeaturePlot(sample_obj, features = gene,
+                              pt.size.factor = 1.5,
+                              stroke = 0,
+                              image.alpha = 0.2) +
+        scale_fill_gradient(
+          low = "lightgrey",
+          high = "red",
+          name = gene
+        ) +
+        ggtitle(paste0(sample_name, " (default gradient)")) +
+        theme(plot.title = element_text(hjust = 0.5, size = 15))
+    }
+    
+    plots_list_v3[[sample_name]] <- p
+  }
+  
+  # 拼接所有样本的图（版本3）
+  combined_plot_v3 <- wrap_plots(plots_list_v3, ncol = 5)
+  
+  # 保存版本3
+  plot_filename_v3 <- file.path(output_3, paste0(gene, "_25samples_spatialfeatureplot_v3.pdf"))
+  ggsave(plot_filename_v3, combined_plot_v3, width = 15, height = 20)
+  
+  # === 版本4：三色渐变，红色渐变出现在50%最大值到最大值之间 ===
+  plots_list_v4 <- list()
+  
+  for (sample_name in sample_names) {
+    sample_obj <- st_25[[sample_name]]
+    
+    # 检查基因是否存在
+    if (!("SCT" %in% names(sample_obj@assays)) ||
+        !(gene %in% rownames(sample_obj[["SCT"]]@data))) {
+      # 创建占位图
+      p_placeholder <- ggplot() + 
+        ggtitle(paste0(sample_name, " (", gene, " not found)")) +
+        theme_void() +
+        theme(plot.title = element_text(size = 15))
+      plots_list_v4[[sample_name]] <- p_placeholder
+      next
+    }
+    
+    # 获取当前样本的基因表达数据
+    current_sample_data <- as.numeric(sample_obj[["SCT"]]@data[gene, ])
+    
+    # 计算当前样本的最大值和50%最大值作为中间转换点
+    sample_max <- max(current_sample_data, na.rm = TRUE)
+    sample_50_percent_max <- sample_max * 0.5
+    
+    # 绘图（使用50%最大值作为中间转换点）
+    if (!is.na(sample_max) && sample_max > 0 && sample_50_percent_max > 0) {
+      p <- SpatialFeaturePlot(sample_obj, features = gene,
+                              pt.size.factor = 1.5,
+                              stroke = 0,
+                              image.alpha = 0.2) +
+        scale_fill_gradient2(
+          low = "white",
+          mid = "lightgrey", 
+          high = "red",
+          midpoint = sample_50_percent_max,
+          name = gene
+        ) +
+        ggtitle(sample_name) +
+        theme(plot.title = element_text(hjust = 0.5, size = 15))
+      
+      # 打印每个样本的最大值和50%最大值用于调试
+      message(paste0("V4 - Sample: ", sample_name, ", Max: ", round(sample_max, 4), 
+                     ", 50% Max: ", round(sample_50_percent_max, 4)))
+      
+    } else {
+      # 如果最大值为NA或0，使用默认渐变
+      p <- SpatialFeaturePlot(sample_obj, features = gene,
+                              pt.size.factor = 1.5,
+                              stroke = 0,
+                              image.alpha = 0.2) +
+        scale_fill_gradient(
+          low = "lightgrey",
+          high = "red",
+          name = gene
+        ) +
+        ggtitle(paste0(sample_name, " (default gradient)")) +
+        theme(plot.title = element_text(hjust = 0.5, size = 15))
+    }
+    
+    plots_list_v4[[sample_name]] <- p
+  }
+  
+  # 拼接所有样本的图（版本4）
+  combined_plot_v4 <- wrap_plots(plots_list_v4, ncol = 5)
+  
+  # 保存版本4
+  plot_filename_v4 <- file.path(output_4, paste0(gene, "_25samples_spatialfeatureplot_v4.pdf"))
+  ggsave(plot_filename_v4, combined_plot_v4, width = 15, height = 20)
+  
+  # === 版本5：结合V1的全局最大值设置和V3的三色渐变方式 ===
+  # 最大值设为所有样本最大值中最小值的80%，颜色渐变过渡位置在相应样本最大值的30%值
+  plots_list_v5 <- list()
+  
+  for (sample_name in sample_names) {
+    sample_obj <- st_25[[sample_name]]
+    
+    # 检查基因是否存在
+    if (!("SCT" %in% names(sample_obj@assays)) ||
+        !(gene %in% rownames(sample_obj[["SCT"]]@data))) {
+      # 创建占位图
+      p_placeholder <- ggplot() + 
+        ggtitle(paste0(sample_name, " (", gene, " not found)")) +
+        theme_void() +
+        theme(plot.title = element_text(size = 15))
+      plots_list_v5[[sample_name]] <- p_placeholder
+      next
+    }
+    
+    # 获取当前样本的基因表达数据
+    current_sample_data <- as.numeric(sample_obj[["SCT"]]@data[gene, ])
+    
+    # 计算当前样本的最大值和30%最大值作为中间转换点
+    sample_max <- max(current_sample_data, na.rm = TRUE)
+    sample_30_percent_max <- sample_max * 0.3
+    
+    # 绘图（设置全局最大值cutoff为80%的最小最大值，使用30%当前样本最大值作为中间转换点）
+    if (!is.na(v5_max_cutoff) && !is.na(sample_max) && sample_max > 0 && sample_30_percent_max > 0) {
+      p <- SpatialFeaturePlot(sample_obj, features = gene,
+                              pt.size.factor = 1.5,
+                              stroke = 0,
+                              image.alpha = 0.2,
+                              max.cutoff = v5_max_cutoff) +
+        scale_fill_gradient2(
+          low = "white",
+          mid = "lightgrey", 
+          high = "red",
+          midpoint = sample_30_percent_max,
+          name = gene
+        ) +
+        ggtitle(sample_name) +
+        theme(plot.title = element_text(hjust = 0.5, size = 15))
+      
+      # 打印每个样本的相关数值用于调试
+      message(paste0("V5 - Sample: ", sample_name, 
+                     ", Sample Max: ", round(sample_max, 4), 
+                     ", 30% Sample Max (midpoint): ", round(sample_30_percent_max, 4),
+                     ", Global Max Cutoff: ", round(v5_max_cutoff, 4)))
+      
+    } else {
+      # 如果无法设置合适的参数，使用默认渐变
+      if (!is.na(v5_max_cutoff)) {
+        p <- SpatialFeaturePlot(sample_obj, features = gene,
+                                pt.size.factor = 1.5,
+                                stroke = 0,
+                                image.alpha = 0.2,
+                                max.cutoff = v5_max_cutoff) +
+          scale_fill_gradient(
+            low = "lightgrey",
+            high = "red",
+            name = gene
+          ) +
+          ggtitle(paste0(sample_name, " (default gradient with cutoff)")) +
+          theme(plot.title = element_text(hjust = 0.5, size = 15))
+      } else {
+        p <- SpatialFeaturePlot(sample_obj, features = gene,
+                                pt.size.factor = 1.5,
+                                stroke = 0,
+                                image.alpha = 0.2) +
+          scale_fill_gradient(
+            low = "lightgrey",
+            high = "red",
+            name = gene
+          ) +
+          ggtitle(paste0(sample_name, " (default gradient no cutoff)")) +
+          theme(plot.title = element_text(hjust = 0.5, size = 15))
+      }
+    }
+    
+    plots_list_v5[[sample_name]] <- p
+  }
+  
+  # 拼接所有样本的图（版本5）
+  combined_plot_v5 <- wrap_plots(plots_list_v5, ncol = 5)
+  
+  # 保存版本5
+  plot_filename_v5 <- file.path(output_5, paste0(gene, "_25samples_spatialfeatureplot_v5.pdf"))
+  ggsave(plot_filename_v5, combined_plot_v5, width = 15, height = 20)
+  
+  message("Completed gene: ", gene)
+}
+
+message("All genes processed successfully!")
+
+```
+
+3 将ANTXR1这个基因表达值的25%分位数值设为阈值，大于此值的定义为ANTXR1基因表达阳性的细胞。绘制不同分组中阳性细胞的比例图。
+```{r}
+library(dplyr)
+library(ggplot2)
+
+group_col <- c('IPF'='#EE7B1B','Ctrl'='#4CA64A')
+
+# 创建输出目录
+output_3 <- 'IPF_human/positive_plot'
+dir.create(output_3, recursive = TRUE)
+
+# 定义要分析的基因
+genes <- c("ANTXR1", "FN1", "COL1A1", "ACTA2")
+
+# 获取元数据
+meta <- st@meta.data
+
+# 为每个基因计算阳性细胞并添加到元数据中
+for (gene in genes) {
+  # 获取基因表达值
+  gene_expr <- as.numeric(st[["SCT"]]@data[gene, ])
+  
+  # 计算25%分位数作为阈值
+  gene_quartile <- quantile(gene_expr, 0.25, na.rm = TRUE)
+  
+  # 定义阳性细胞
+  positive_cells <- gene_expr > gene_quartile
+  
+  # 添加到元数据中
+  add_colname <- paste0(gene, '_positive')
+  meta[, add_colname] <- ifelse(positive_cells, paste0(gene, '(+)'), paste0(gene, '(-)'))
+}
+
+# 将更新后的元数据添加回Seurat对象（可选）
+st@meta.data <- meta
+
+# ========== 任务3：按Group分组绘制阳性比例图 ==========
+
+# 计算每个样本在不同Group中的阳性比例
+sample_proportions_group <- meta %>%
+  group_by(sample, Group) %>%
+  summarise(
+    total_cells = n(),
+    across(
+      ends_with('_positive'), 
+      list(
+        positive_cells = ~ sum(. == paste0(sub("_positive", "", cur_column()), "(+)")),
+        positive_ratio = ~ sum(. == paste0(sub("_positive", "", cur_column()), "(+)")) / total_cells
+      ),
+      .names = "{sub('_positive', '', .col)}_{.fn}"
+    ),
+    .groups = 'drop'
+  )
+
+print("Group-based proportions:")
+print(sample_proportions_group)
+
+# 为每个基因绘制Group分组的小提琴图
+for (gene in genes) {
+  gene_col <- paste0(gene, "_positive_ratio")
+  
+  p_group <- ggplot(sample_proportions_group, aes(x = Group, y = !!sym(gene_col), fill = Group)) +
+    geom_violin(trim = TRUE, adjust = 0.5) +
+    geom_jitter(colour = "black", fill = "white", size = 2, width = 0.05, alpha = 0.7) +
+    labs(title = paste("Proportion of", gene, "Positive Cells by Group"),
+         x = "Group",
+         y = paste("Proportion of", gene, "Positive Cells")) +
+    theme_classic() +
+    theme(
+      axis.title.x = element_text(size = 14),
+      axis.title.y = element_text(size = 14),
+      axis.text.x = element_text(size = 12),
+      axis.text.y = element_text(size = 12),
+      plot.title = element_text(size = 16, hjust = 0.5),
+      legend.text = element_text(size = 12),
+      legend.title = element_text(size = 14)
+    ) +
+    scale_fill_manual(values = group_col)  # 假设你已定义了group_col颜色
+  
+  # 保存图表
+  ggsave(file.path(output_3, paste0('Group_', gene, '_Positive_FeatureStatPlot.pdf')), 
+         p_group, width = 5, height = 5)
+  
+  message("Saved Group plot for gene: ", gene)
+}
+
+# ========== 任务4：按Biopsies分组绘制阳性比例图 ==========
+
+# 计算每个样本在不同Biopsies中的阳性比例
+sample_proportions_biopsies <- meta %>%
+  group_by(sample, Biopsies) %>%
+  summarise(
+    total_cells = n(),
+    across(
+      ends_with('_positive'), 
+      list(
+        positive_cells = ~ sum(. == paste0(sub("_positive", "", cur_column()), "(+)")),
+        positive_ratio = ~ sum(. == paste0(sub("_positive", "", cur_column()), "(+)")) / total_cells
+      ),
+      .names = "{sub('_positive', '', .col)}_{.fn}"
+    ),
+    .groups = 'drop'
+  )
+
+print("Biopsies-based proportions:")
+print(sample_proportions_biopsies)
+
+# 为每个基因绘制Biopsies分组的小提琴图
+for (gene in genes) {
+  gene_col <- paste0(gene, "_positive_ratio")
+  
+  p_biopsies <- ggplot(sample_proportions_biopsies, aes(x = Biopsies, y = !!sym(gene_col), fill = Biopsies)) +
+    geom_violin(trim = TRUE, adjust = 0.5) +
+    geom_jitter(colour = "black", fill = "white", size = 2, width = 0.05, alpha = 0.7) +
+    labs(title = paste("Proportion of", gene, "Positive Cells by Biopsies"),
+         x = "Biopsies",
+         y = paste("Proportion of", gene, "Positive Cells")) +
+    theme_classic() +
+    theme(
+      axis.title.x = element_text(size = 14),
+      axis.title.y = element_text(size = 14),
+      axis.text.x = element_text(size = 12),
+      axis.text.y = element_text(size = 12),
+      plot.title = element_text(size = 14, hjust = 0.5),
+      legend.text = element_text(size = 12),
+      legend.title = element_text(size = 12)
+    ) +
+    scale_fill_brewer(palette = "Set1")
+  
+  # 保存图表
+  ggsave(file.path(output_3, paste0('Biopsies_', gene, '_Positive_FeatureStatPlot.pdf')), 
+         p_biopsies, width = 5, height = 5)
+  
+  message("Saved Biopsies plot for gene: ", gene)
+}
+
+message("All positive ratio plots completed!")
+
+# 可选：保存阳性比例数据为CSV文件
+write.csv(sample_proportions_group, 
+          file.path(output_3, "Group_positive_proportions_all_genes.csv"), 
+          row.names = FALSE)
+
+write.csv(sample_proportions_biopsies, 
+          file.path(output_3, "Biopsies_positive_proportions_all_genes.csv"), 
+          row.names = FALSE)
+
+message("Positive proportion data saved to CSV files.")
+
+```
+
+
+4 去除B2样本，另外三个分期的样本各选一张片子（去除重复取样的片子），生成新的st对象
+```{r}
+dput(names(st_25))
+# 定义所需样本名称的顺序
+sample_order <- c("HC_1_B0_2", "HC_2_B0", "HC_3_B0_1", "HC_4_B0", 
+                  "IPF_1_B1_2", "IPF_2_B1_1", "IPF_3_B1", "IPF_4_B1_2",
+                  "IPF_1_B3_2", "IPF_2_B3_2", "IPF_3_B3", "IPF_4_B3")
+
+# 从st_25列表中提取指定的样本
+st_12 <- st_25[sample_order]
+qs::qsave(st_12,'IPF_human/IPF_list_12samples_SCT_S-BSST1410.qs')
+
+# 验证结果
+print(names(st_12))  # 检查是否按指定顺序排列
+length(st_12)  # 检查样本数量
+```
+
+```{r}
+# 创建输出目录
+output_4 <- 'IPF_human/12samples_spatialfeatureplot_v1'
+dir.create(output_4, recursive = TRUE)
+
+# 定义目标基因
+genes <- c("ANTXR1", "FN1", "COL1A1", "ACTA2")
+
+# 循环处理每个基因
+for (gene in genes) {
+  message("Processing gene: ", gene)
+  
+  # 1) 计算每个样本中该基因的最大表达量
+  sample_names <- names(st_12)
+  sample_max_values <- sapply(sample_names, function(sample_name) {
+    sample_obj <- st_12[[sample_name]]
+    
+    # 检查基因是否存在
+    if (!("SCT" %in% names(sample_obj@assays)) ||
+        !(gene %in% rownames(sample_obj[["SCT"]]@data))) {
+      warning(sprintf("Gene %s not found in sample %s", gene, sample_name))
+      return(NA_real_)
+    }
+    
+    # 提取该样本中该基因的表达量
+    gene_expr <- as.numeric(sample_obj[["SCT"]]@data[gene, ])
+    max_expr <- max(gene_expr, na.rm = TRUE)
+    return(max_expr)
+  }, USE.NAMES = TRUE)
+  
+  # 转换为数据框并保存
+  sample_max_values_df <- data.frame(sample = names(sample_max_values), 
+                                     max_value = unname(sample_max_values),
+                                     stringsAsFactors = FALSE)
+  write.csv(sample_max_values_df, 
+            file.path(output_4, paste0("12samples_max_values_df_", gene, ".csv")), 
+            row.names = FALSE)
+  
+  # 计算所有样本最大值的25%分位数（用于参考）
+  if (all(is.na(sample_max_values_df$max_value))) {
+    warning("All max values are NA for gene ", gene)
+    cutoff_25_percentile <- NA_real_
+  } else {
+    cutoff_25_percentile <- quantile(sample_max_values_df$max_value, 0.25, na.rm = TRUE)
+  }
+  
+  print(sample_max_values_df)
+  print(paste0("The 25th percentile of all sample max values for ", gene, " is: ", cutoff_25_percentile))
+  
+  # 2) 为每个样本绘制图（使用V3版本的三色渐变）
+  plots_list_v1 <- list()
+  
+  for (sample_name in sample_names) {
+    sample_obj <- st_12[[sample_name]]
+    
+    # 检查基因是否存在
+    if (!("SCT" %in% names(sample_obj@assays)) ||
+        !(gene %in% rownames(sample_obj[["SCT"]]@data))) {
+      # 创建占位图
+      p_placeholder <- ggplot() + 
+        ggtitle(paste0(sample_name, " (", gene, " not found)")) +
+        theme_void() +
+        theme(plot.title = element_text(size = 10))
+      plots_list_v1[[sample_name]] <- p_placeholder
+      next
+    }
+    
+    # 获取当前样本的基因表达数据
+    current_sample_data <- as.numeric(sample_obj[["SCT"]]@data[gene, ])
+    
+    # 计算当前样本的最大值和30%最大值作为中间转换点
+    sample_max <- max(current_sample_data, na.rm = TRUE)
+    sample_30_percent_max <- sample_max * 0.3
+    
+    # 绘图（使用30%最大值作为中间转换点）
+    if (!is.na(sample_max) && sample_max > 0 && sample_30_percent_max > 0) {
+      p <- SpatialFeaturePlot(sample_obj, features = gene,
+                              pt.size.factor = 1.5,
+                              stroke = 0,
+                              image.alpha = 0.2) +
+        scale_fill_gradient2(
+          low = "white",
+          mid = "lightgrey", 
+          high = "red",
+          midpoint = sample_30_percent_max,
+          name = gene
+        ) +
+        ggtitle(sample_name) +
+        theme(plot.title = element_text(hjust = 0.5, size = 12))
+      
+      # 打印每个样本的最大值和30%最大值用于调试
+      message(paste0("Sample: ", sample_name, ", Max: ", round(sample_max, 4), 
+                     ", 30% Max: ", round(sample_30_percent_max, 4)))
+      
+    } else {
+      # 如果最大值为NA或0，使用默认渐变
+      p <- SpatialFeaturePlot(sample_obj, features = gene,
+                              pt.size.factor = 1.5,
+                              stroke = 0,
+                              image.alpha = 0.2) +
+        scale_fill_gradient(
+          low = "lightgrey",
+          high = "red",
+          name = gene
+        ) +
+        ggtitle(paste0(sample_name, " (default gradient)")) +
+        theme(plot.title = element_text(hjust = 0.5, size = 12))
+    }
+    
+    plots_list_v1[[sample_name]] <- p
+  }
+  
+  # 3) 拼接所有样本的图（按3行4列排列，适合12个样本）
+  combined_plot_v1 <- wrap_plots(plots_list_v1, ncol = 4)
+  
+  # 4) 保存图片
+  plot_filename_v1 <- file.path(output_4, paste0(gene, "_12samples_spatialfeatureplot_v3_30percent.pdf"))
+  ggsave(plot_filename_v1, combined_plot_v1, width = 16, height = 12)
+  
+  message("Completed gene: ", gene)
+  message("Saved plot to: ", plot_filename_v1)
+}
+
+message("All genes processed successfully!")
+
+```
+
